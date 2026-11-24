@@ -1,4 +1,4 @@
-.ns-brand, .ns-capture-name {
+﻿.ns-brand, .ns-capture-name {
     display: flex;
     align-items: center;
     gap: .75rem;
@@ -64,7 +64,7 @@
     background: #f7f7f7;
 }
 .ns-empty svg { width: 3rem; height: 3rem; }
-.ns-empty p { margin: 0; color: #515151; }
+.ns-empty p { max-width: 65ch; margin: 0; color: #515151; }
 @media (prefers-reduced-motion: no-preference) {
     .ns-empty { animation: ns-appear 180ms ease-out both; }
     .stButton button, .stDownloadButton button, [role="tab"] {

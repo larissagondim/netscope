@@ -134,16 +134,22 @@ else:
 if capture is None or capture.df.empty:
     if capture is not None:
         title = "Captura sem pacotes"
+        description = ""
         detail = "Escolha outra captura ou verifique a interface e o filtro BPF."
-    elif source == "Captura ao vivo":
-        title = "Capture o tráfego da rede"
-        detail = "Configure a interface e inicie a captura na barra lateral."
     else:
-        title = "Abra uma captura de rede"
+        title = "NetScope: Sistema de Análise de Rede"
+        description = (
+            "<p>Aplicação acadêmica para <strong>análise e visualização de tráfego de redes</strong> "
+            "a partir de arquivos PCAP/PCAPNG, com inspeção de pacotes camada a camada "
+            "e identificação de comportamentos anômalos.</p>"
+        )
         detail = "Selecione um arquivo PCAP ou PCAPNG na barra lateral."
+        if source == "Captura ao vivo":
+            detail = "Configure a interface e inicie a captura na barra lateral."
+
     st.html(
         f'<section class="ns-empty">{BRAND_ICON}'
-        f'<h1>{title}</h1><p>{detail}</p></section>'
+        f'<h1>{title}</h1>{description}<p>{detail}</p></section>'
     )
     if source == "Arquivo PCAP" and capture is None:
         st.button(
