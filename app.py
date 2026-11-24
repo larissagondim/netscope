@@ -139,7 +139,7 @@ if capture is None or capture.df.empty:
     else:
         title = "NetScope: Sistema de Análise de Rede"
         description = (
-            "<p>Aplicação acadêmica para <strong>análise e visualização de tráfego de redes</strong> "
+            "<p class='ns-intro'>Aplicação acadêmica para <strong>análise e visualização de tráfego de redes</strong> "
             "a partir de arquivos PCAP/PCAPNG, com inspeção de pacotes camada a camada "
             "e identificação de comportamentos anômalos.</p>"
         )
