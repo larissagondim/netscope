@@ -9,11 +9,11 @@ Projeto da disciplina de Redes de Computadores. Bacharelado em Ciência da Compu
 
 | Requisito do projeto | Onde está |
 |---|---|
-| Leitura de PCAP/PCAPNG (TCP, UDP, ICMP, ARP, DNS, HTTP, TLS) | `netscope/parser.py` |
+| Leitura de PCAP/PCAPNG (TCP, UDP, ICMP, ARP, DNS, mDNS, LLMNR, HTTP, TLS) | `netscope/parser.py` |
 | Estatísticas: pacotes, bytes, protocolos, IPs, portas, evolução temporal | `netscope/stats.py`, aba **Visão geral** |
 | Inspeção individual de pacotes: cabeçalhos, campos, encapsulamento, hexdump | `netscope/packet_view.py`, aba **Inspeção** |
 | DNS: consultas × respostas, tempo de resposta, NXDOMAIN | `protocols.dns_transactions` |
-| TCP: three-way handshake, RTT, encerramento por FIN/RST | `protocols.tcp_sessions` |
+| TCP: three-way handshake, RTT, encerramento por FIN/RST, reuso de 4-tupla | `protocols.tcp_sessions` |
 | HTTP: método, host, URI, status | `protocols.http_messages` |
 | TLS: versão, ClientHello/ServerHello, SNI | `protocols.tls_handshakes` / `tls_servers` |
 | Anomalias: varredura de portas/hosts, excesso de SYN, DNS incomum, NXDOMAIN, ARP spoofing, ICMP flood | `netscope/anomalies.py`, aba **Anomalias** |
@@ -72,13 +72,20 @@ netscope/
    Cada pacote vira um dicionário de campos (MACs, IPs, portas, flags TCP, campos DNS/HTTP/TLS) e o conjunto
    forma um `DataFrame` do pandas. Os bytes brutos são guardados para reconstruir o pacote na inspeção.
 2. **Classificação**: cada pacote recebe o protocolo de mais alto nível reconhecido
-   (ARP → ICMP → TCP/UDP → DNS/HTTP/TLS). HTTP é reconhecido pela linha inicial (`GET …`, `HTTP/1.1 …`).
+   (ARP → ICMP → TCP/UDP → DNS/HTTP/TLS). Mensagens no formato DNS nas portas 5353 e 5355 são rotuladas
+   **MDNS** e **LLMNR**, como no Wireshark, e ficam fora das análises e anomalias de DNS. HTTP é reconhecido pela linha inicial (`GET …`, `HTTP/1.1 …`).
    TLS é reconhecido pelo cabeçalho de registro (tipo 20–23, versão `0x03xx`). O ClientHello é interpretado
    manualmente para extrair o **SNI** e a versão anunciada na extensão `supported_versions`, o que identifica o TLS 1.3.
 3. **Encapsulamento**: na inspeção, o pacote é percorrido camada por camada (`layer.payload`). Para cada camada
    são calculados o tamanho do cabeçalho (`len(camada) − len(payload)`) e o offset no quadro, e os campos
    aparecem como no painel de detalhes do Wireshark.
-4. **Anomalias**: regras sobre janelas de tempo, todas com limiares ajustáveis na interface:
+4. **Sessões TCP**: os pacotes são agrupados pela 4-tupla (IPs e portas). Se a mesma 4-tupla for reutilizada,
+   um SYN novo abre outra sessão quando a anterior terminou (FIN/RST) ou quando o número de sequência inicial
+   é diferente. Um SYN retransmitido continua na mesma sessão.
+5. **Anomalias**: regras sobre uma **janela deslizante** de tempo, todas com limiares ajustáveis na interface.
+   Uma ocorrência é detectada se *qualquer* intervalo de 10 s atingir o limiar, não só intervalos alinhados
+   em 0, 10, 20 s. Assim, uma varredura que cruza a fronteira entre duas janelas fixas não escapa. Janelas
+   sobrepostas que disparam são unidas em um único episódio.
 
 | Regra | Critério padrão |
 |---|---|
@@ -131,7 +138,7 @@ TCP RST                      206        206  OK
 | Cenário | Como gerar | Resultado esperado no NetScope |
 |---|---|---|
 | Navegação normal | capture com Wireshark enquanto acessa sites | DNS + TLS com SNI, nenhuma anomalia |
-| HTTP em texto claro | `python -m http.server 8000` e `curl localhost:8000` | requisição GET e resposta 200 na aba HTTP |
+| HTTP em texto claro | `python -m http.server 8080` e `curl localhost:8080` | requisição GET e resposta 200 na aba HTTP |
 | Varredura | `nmap -sS <ip-da-sua-VM>` | "Varredura de portas" |
 | Excesso de SYN | `hping3 -S --flood -p 80 <ip-da-sua-VM>` (por poucos segundos) | "Excesso de SYN" |
 | Ping | `ping -f <ip>` (Linux, root) | "Volume elevado de ICMP" |
@@ -140,6 +147,8 @@ TCP RST                      206        206  OK
 
 - Não remonta fluxos TCP. Mensagens HTTP ou TLS divididas em vários segmentos são reconhecidas apenas pelo
   primeiro segmento, como o Wireshark faria com a remontagem desativada.
+- O NetScope reconhece HTTP em qualquer porta, mas o Wireshark só disseca como HTTP as portas registradas
+  (80, 8080, 3128…). Em portas como 8000, use *Analyze → Decode As* no Wireshark antes de comparar.
 - Apenas HTTP/1.x em texto claro. HTTP/2 e HTTPS aparecem como TLS.
 - O conteúdo cifrado do TLS não é decifrado. Só metadados do handshake são exibidos.
 - Capturas muito grandes (centenas de MB) consomem bastante memória. Use o campo "Limite de pacotes".
