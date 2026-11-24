@@ -204,11 +204,14 @@ def tls_servers(df: pd.DataFrame) -> pd.DataFrame:
     hs = tls_handshakes(df)
     if hs.empty:
         return hs
-    ch = hs[hs["tls_handshake"] == "ClientHello"]
-    sh = hs[hs["tls_handshake"] == "ServerHello"][["src_ip", "src_port", "dst_ip", "dst_port", "tls_version"]]
+    keys = ["src_ip", "src_port", "dst_ip", "dst_port"]
+    ch = hs[hs["tls_handshake"] == "ClientHello"].sort_values("tempo_s")
+    sh = hs[hs["tls_handshake"] == "ServerHello"][keys + ["tempo_s", "tls_version"]]
     sh = sh.rename(columns={"src_ip": "dst_ip", "src_port": "dst_port", "dst_ip": "src_ip", "dst_port": "src_port",
-                            "tls_version": "versao_negociada"})
-    m = ch.merge(sh, on=["src_ip", "src_port", "dst_ip", "dst_port"], how="left")
+                            "tempo_s": "t_sh", "tls_version": "versao_negociada"}).sort_values("t_sh")
+    # Cada ClientHello casa com o primeiro ServerHello posterior na mesma 4-tupla. Um merge só pela
+    # 4-tupla multiplicaria as linhas quando as portas são reutilizadas por conexões sucessivas.
+    m = pd.merge_asof(ch, sh, left_on="tempo_s", right_on="t_sh", by=keys, direction="forward")
     return (m.groupby(["tls_sni", "dst_ip"], dropna=False)
             .agg(conexoes=("pacote", "count"),
                  versao_negociada=("versao_negociada", lambda s: ", ".join(sorted(set(s.dropna()))) or "?"))

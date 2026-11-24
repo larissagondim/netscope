@@ -195,3 +195,11 @@ def test_vlan_and_linux_cooked(tmp_path):
     cap = load_pcap(str(f))
     assert cap.df.iloc[0]["src_ip"] == "1.1.1.1"
     assert [l["name"] for l in packet_view.layers(rebuild_packet(cap, 0))][1:] == ["IP", "TCP"]
+
+
+def test_tls_servers_with_port_reuse(cap):
+    # O exemplo reutiliza portas entre rodadas: cada ClientHello deve contar uma única conexão
+    srv = protocols.tls_servers(cap.df).set_index("sni")
+    hs = protocols.tls_handshakes(cap.df)
+    ch = hs[hs["tls_handshake"] == "ClientHello"]["tls_sni"].value_counts()
+    assert srv["conexoes"].to_dict() == ch.to_dict() == {"www.google.com": 6, "ufpb.br": 6}
