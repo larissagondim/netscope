@@ -8,6 +8,7 @@ import io
 import os
 import tempfile
 import zipfile
+from html import escape
 from pathlib import Path
 
 import pandas as pd
@@ -18,12 +19,21 @@ import streamlit as st
 from netscope import anomalies, packet_view, protocols, stats
 from netscope.parser import Capture, load_packets, load_pcap, rebuild_packet
 
-st.set_page_config(page_title="NetScope", page_icon="🛰️", layout="wide")
+ROOT = Path(__file__).parent
+st.set_page_config(page_title="NetScope", page_icon=str(ROOT / "assets" / "netscope.svg"), layout="wide")
+st.html(ROOT / "assets" / "netscope.css")
+
+CHART_COLORS = ["#202020", "#606060", "#979797", "#bcbcbc", "#454545", "#767676", "#d5d5d5"]
+px.defaults.color_discrete_sequence = CHART_COLORS
 
 EXAMPLE = Path(__file__).parent / "exemplos" / "exemplo_netscope.pcap"
-LAYER_COLORS = {"Enlace": "#4C78A8", "Enlace / Rede": "#72B7B2", "Rede": "#F58518", "Transporte": "#54A24B",
-                "Aplicação": "#B279A2", "Dados (payload)": "#9D755D", "Enchimento": "#BAB0AC"}
-SEV_COLORS = {"Alta": "#d62728", "Média": "#ff7f0e", "Baixa": "#e7ba52"}
+LAYER_COLORS = {
+    "Enlace": "#292929", "Enlace / Rede": "#444444", "Rede": "#5c5c5c",
+    "Transporte": "#737373", "Aplicação": "#929292", "Dados (payload)": "#b5b5b5",
+    "Enchimento": "#d6d6d6",
+}
+SEV_COLORS = {"Alta": "#171717", "Média": "#6b6b6b", "Baixa": "#acacac"}
+BRAND_ICON = (ROOT / "assets" / "netscope.svg").read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- #
@@ -54,18 +64,22 @@ def csv_bytes(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False).encode("utf-8-sig")  # BOM: abre corretamente no Excel
 
 
-def download(df: pd.DataFrame, name: str, label: str = "⬇️ Exportar CSV", key: str | None = None):
+def download(df: pd.DataFrame, name: str, label: str = "⬇Exportar CSV", key: str | None = None):
     st.download_button(label, csv_bytes(df), file_name=name, mime="text/csv", key=key or f"dl_{name}",
-                       disabled=df.empty)
+                       disabled=df.empty, icon=":material/download:")
 
 
 # --------------------------------------------------------------------------- #
 # Barra lateral: fonte de dados
 # --------------------------------------------------------------------------- #
-st.sidebar.title("🛰️ NetScope")
-st.sidebar.caption("Sistema de Análise de Rede")
+st.sidebar.html(
+    f'<div class="ns-brand">{BRAND_ICON}<span>NetScope</span></div>'
+)
+st.sidebar.subheader("Captura")
 
-source = st.sidebar.radio("Fonte dos dados", ["Arquivo PCAP", "Exemplo incluído", "Captura ao vivo"])
+source = st.sidebar.radio(
+    "Fonte dos dados", ["Arquivo PCAP", "Exemplo incluído", "Captura ao vivo"], key="capture_source"
+)
 max_pk = st.sidebar.number_input("Limite de pacotes (0 = sem limite)", min_value=0, value=0, step=10000,
                                  help="Útil para capturas muito grandes.")
 max_pk = int(max_pk) or None
@@ -91,13 +105,13 @@ elif source == "Exemplo incluído":
 else:
     from netscope import capture as live
 
-    st.sidebar.warning("Requer privilégios de administrador (sudo) e, no Windows, o Npcap.")
+    st.sidebar.caption("Requer privilégios de administrador (sudo) e, no Windows, o Npcap.")
     ifaces = live.interfaces()
     iface = st.sidebar.selectbox("Interface", ["(padrão)"] + ifaces)
     count = st.sidebar.number_input("Nº de pacotes", 10, 100000, 500, step=100)
     timeout = st.sidebar.number_input("Tempo máximo (s)", 1, 3600, 30)
     bpf = st.sidebar.text_input("Filtro BPF (opcional)", placeholder="ex.: tcp port 80 or udp port 53")
-    if st.sidebar.button("▶️ Iniciar captura", type="primary"):
+    if st.sidebar.button("▶Iniciar captura", type="primary"):
         try:
             with st.spinner(f"Capturando até {count} pacotes por {timeout}s…"):
                 pkts = live.live_capture(None if iface == "(padrão)" else iface, int(count), int(timeout), bpf)
@@ -114,29 +128,28 @@ else:
     capture = st.session_state.get("live")
     source_name = "captura_ao_vivo.pcap"
     if st.session_state.get("live_pcap"):
-        st.sidebar.download_button("💾 Salvar captura (.pcap)", st.session_state["live_pcap"],
-                                   file_name="captura_netscope.pcap")
+        st.sidebar.download_button("Salvar captura (.pcap)", st.session_state["live_pcap"],
+                                   file_name="captura_netscope.pcap", icon=":material/download:")
 
 if capture is None or capture.df.empty:
-    st.title("🛰️ NetScope: Sistema de Análise de Rede")
-    st.markdown(
-        """
-Ferramenta acadêmica para **análise e visualização de tráfego** a partir de arquivos de captura (PCAP/PCAPNG).
-
-**Como usar:** escolha a fonte dos dados na barra lateral — envie um arquivo `.pcap` gerado pelo
-Wireshark/tcpdump, use o **exemplo incluído** (tráfego sintético com anomalias plantadas) ou faça uma
-**captura ao vivo**.
-
-| Aba | O que mostra |
-|---|---|
-| 📊 Visão geral | volume de pacotes/bytes, protocolos, IPs e portas mais ativos, evolução no tempo |
-| 📦 Pacotes | lista filtrável de todos os pacotes (como no Wireshark) |
-| 🔬 Inspeção | camadas, cabeçalhos, campos e bytes de um pacote (encapsulamento) |
-| 🌐 Protocolos | DNS, handshake TCP, HTTP e TLS |
-| 🚨 Anomalias | indícios de varreduras, SYN flood, DNS incomum, ARP spoofing |
-| 💾 Exportar | todas as tabelas em CSV |
-"""
+    if capture is not None:
+        title = "Captura sem pacotes"
+        detail = "Escolha outra captura ou verifique a interface e o filtro BPF."
+    elif source == "Captura ao vivo":
+        title = "Capture o tráfego da rede"
+        detail = "Configure a interface e inicie a captura na barra lateral."
+    else:
+        title = "Abra uma captura de rede"
+        detail = "Selecione um arquivo PCAP ou PCAPNG na barra lateral."
+    st.html(
+        f'<section class="ns-empty">{BRAND_ICON}'
+        f'<h1>{title}</h1><p>{detail}</p></section>'
     )
+    if source == "Arquivo PCAP" and capture is None:
+        st.button(
+            "Abrir exemplo", icon=":material/folder_open:",
+            on_click=st.session_state.__setitem__, args=("capture_source", "Exemplo incluído"),
+        )
     st.stop()
 
 full = capture.df
@@ -152,7 +165,7 @@ ip_f = st.sidebar.text_input("Endereço IP (origem ou destino)", placeholder="ex
 port_f = st.sidebar.text_input("Porta (origem ou destino)", placeholder="ex.: 443")
 tmax = float(full["rel_time"].max()) if len(full) else 0.0
 t_range = st.sidebar.slider("Intervalo de tempo (s)", 0.0, max(tmax, 0.001), (0.0, max(tmax, 0.001)))
-text_f = st.sidebar.text_input("Buscar no campo Info", placeholder="ex.: SYN, GET, google")
+text_f = st.sidebar.text_input("Buscar no campo Info", placeholder="ex.: SYN, GET, example.org")
 
 df = full
 if sel_protos:
@@ -172,41 +185,50 @@ filtered = len(df) != len(full)
 # --------------------------------------------------------------------------- #
 # Cabeçalho e métricas
 # --------------------------------------------------------------------------- #
-st.title("🛰️ NetScope")
-st.caption(f"Fonte: **{source_name}** · {len(full):,} pacotes"
-           + (f" · exibindo **{len(df):,}** após filtros" if filtered else ""))
+packet_count = f"{len(df):,} de {len(full):,} pacotes" if filtered else f"{len(full):,} pacotes"
+st.html(
+    f'<header class="ns-capture"><div class="ns-capture-name">'
+    f'{BRAND_ICON}<h1>{escape(source_name)}</h1></div>'
+    f'<span class="ns-count">{packet_count}</span></header>'
+)
 
 if df.empty:
     st.warning("Nenhum pacote corresponde aos filtros selecionados.")
     st.stop()
 
 summ = stats.summary(df)
-c = st.columns(6)
-c[0].metric("Pacotes", f"{summ['packets']:,}")
-c[1].metric("Bytes", fmt_bytes(summ["bytes"]))
-c[2].metric("Duração", f"{summ['duration']:.2f} s")
-c[3].metric("Taxa média", fmt_rate(summ["bps"]))
-c[4].metric("Pacotes/s", f"{summ['pps']:,.1f}")
-c[5].metric("Hosts (IPs)", summ["hosts"])
+with st.container(key="capture_metrics"):
+    first, second = st.columns(2)
+    c = [*first.columns(3), *second.columns(3)]
+    c[0].metric("Pacotes", f"{summ['packets']:,}")
+    c[1].metric("Bytes", fmt_bytes(summ["bytes"]))
+    c[2].metric("Duração", f"{summ['duration']:.2f} s")
+    c[3].metric("Taxa média", fmt_rate(summ["bps"]))
+    c[4].metric("Pacotes/s", f"{summ['pps']:,.1f}")
+    c[5].metric("Hosts (IPs)", summ["hosts"])
 
-tabs = st.tabs(["📊 Visão geral", "📦 Pacotes", "🔬 Inspeção", "🌐 Protocolos", "🚨 Anomalias", "💾 Exportar"])
+tabs = st.tabs([
+    ":material/analytics: Visão geral", ":material/table_rows: Pacotes",
+    ":material/layers: Inspeção", ":material/lan: Protocolos",
+    ":material/warning: Anomalias", ":material/download: Exportar",
+])
 
 # --------------------------------------------------------------------------- #
 # 1. Visão geral
 # --------------------------------------------------------------------------- #
 with tabs[0]:
     dist = stats.protocol_distribution(df)
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns([2, 3])
     with col1:
         metric = st.radio("Medida", ["pacotes", "bytes"], horizontal=True, key="dist_metric")
         fig = px.pie(dist, names="protocolo", values=metric, hole=0.45, title=f"Distribuição de protocolos ({metric})")
-        fig.update_traces(textinfo="percent+label")
+        fig.update_traces(textinfo="percent+label", marker_line_width=1, marker_line_color="#fff")
         st.plotly_chart(fig)
     with col2:
         bucket = stats.auto_bucket(summ["duration"])
         tl = stats.timeline(df, bucket)
         ycol = st.radio("Eixo Y", ["pacotes", "bytes"], horizontal=True, key="tl_metric")
-        fig = px.area(tl, x="t", y=ycol, color="protocol",
+        fig = px.area(tl, x="t", y=ycol, color="protocol", pattern_shape="protocol",
                       title=f"Tráfego ao longo do tempo (intervalos de {bucket:g}s)",
                       labels={"t": "tempo (s)", "protocol": "protocolo"})
         st.plotly_chart(fig)
@@ -222,7 +244,7 @@ with tabs[0]:
         if not tp.empty:
             tp["rotulo"] = tp.apply(lambda r: f"{r.transporte}/{r.porta}" + (f" ({r.servico})" if r.servico else ""),
                                     axis=1)
-            fig = px.bar(tp.sort_values("pacotes"), x="pacotes", y="rotulo", color="transporte", orientation="h",
+            fig = px.bar(tp.sort_values("pacotes"), x="pacotes", y="rotulo", color="transporte", pattern_shape="transporte", orientation="h",
                          title="Top 10 portas de destino", labels={"rotulo": ""})
             st.plotly_chart(fig)
         else:
@@ -247,7 +269,7 @@ with tabs[0]:
 # --------------------------------------------------------------------------- #
 PACKET_COLS = ["no", "rel_time", "src_ip", "src_port", "dst_ip", "dst_port", "protocol", "length", "info"]
 with tabs[1]:
-    st.caption("Clique em uma linha para inspecioná-la na aba 🔬 Inspeção.")
+    st.caption("Selecione uma linha e abra a aba Inspeção.")
     view = df[PACKET_COLS].rename(columns={
         "no": "Nº", "rel_time": "Tempo (s)", "src_ip": "Origem", "src_port": "Porta orig.", "dst_ip": "Destino",
         "dst_port": "Porta dest.", "protocol": "Protocolo", "length": "Tamanho", "info": "Info"})
@@ -256,13 +278,15 @@ with tabs[1]:
     rows = event.selection.rows if event and hasattr(event, "selection") else []
     if rows:
         st.session_state["selected_no"] = int(view.iloc[rows[0]]["Nº"])
-    download(df.drop(columns=["timestamp"], errors="ignore"), "pacotes.csv", "⬇️ Exportar pacotes filtrados (CSV)")
+    download(df.drop(columns=["timestamp"], errors="ignore"), "pacotes.csv", "⬇Exportar pacotes filtrados (CSV)")
 
 # --------------------------------------------------------------------------- #
 # 3. Inspeção de pacote
 # --------------------------------------------------------------------------- #
 with tabs[2]:
-    default_no = st.session_state.get("selected_no", int(df["no"].iloc[0]))
+    default_no = st.session_state.get("selected_no")
+    if default_no is None or not df["no"].eq(default_no).any():
+        default_no = int(df["no"].iloc[0])
     no = st.number_input("Número do pacote", min_value=1, max_value=len(capture.raw), value=default_no,
                          key=f"insp_{default_no}")
     pkt = rebuild_packet(capture, int(no) - 1)
@@ -404,7 +428,7 @@ with tabs[3]:
 with tabs[4]:
     st.caption("As ocorrências abaixo são **indícios** obtidos por regras e limiares configuráveis — não "
                "confirmam a existência de ataques. Ajuste os limiares ao perfil da rede analisada.")
-    with st.expander("⚙️ Limiares de detecção"):
+    with st.expander("Limiares de detecção", icon=":material/tune:"):
         d = anomalies.Thresholds()
         c = st.columns(5)
         th = anomalies.Thresholds(
@@ -426,14 +450,14 @@ with tabs[4]:
         counts = an["severidade"].value_counts()
         c = st.columns(4)
         c[0].metric("Ocorrências", len(an))
-        c[1].metric("🔴 Alta", int(counts.get("Alta", 0)))
-        c[2].metric("🟠 Média", int(counts.get("Média", 0)))
-        c[3].metric("🟡 Baixa", int(counts.get("Baixa", 0)))
+        c[1].metric("Alta", int(counts.get("Alta", 0)))
+        c[2].metric("Média", int(counts.get("Média", 0)))
+        c[3].metric("Baixa", int(counts.get("Baixa", 0)))
 
         # Linha do tempo: tráfego total + faixas das anomalias
         tl = stats.timeline(df, stats.auto_bucket(summ["duration"]), by_protocol=False)
         fig = go.Figure()
-        fig.add_scatter(x=tl["t"], y=tl["pacotes"], mode="lines", name="pacotes", line_color="#4C78A8")
+        fig.add_scatter(x=tl["t"], y=tl["pacotes"], mode="lines", name="pacotes", line_color="#202020")
         for _, a in an.iterrows():
             fig.add_vrect(x0=a["inicio_s"], x1=max(a["fim_s"], a["inicio_s"] + 0.05), opacity=0.2, line_width=0,
                           fillcolor=SEV_COLORS[a["severidade"]])
@@ -442,8 +466,7 @@ with tabs[4]:
         st.plotly_chart(fig)
 
         for _, a in an.iterrows():
-            icon = {"Alta": "🔴", "Média": "🟠", "Baixa": "🟡"}[a["severidade"]]
-            with st.expander(f"{icon} {a['tipo']} — origem {a['origem']} → {a['alvo']}"):
+            with st.expander(f"{a['severidade']} · {a['tipo']} — origem {a['origem']} → {a['alvo']}"):
                 st.markdown(f"**Evidência:** {a['evidencia']}")
                 st.markdown(f"**Período:** {a['inicio_s']:.3f}s – {a['fim_s']:.3f}s")
                 st.markdown(f"**Interpretação:** {a['descricao']}")
@@ -471,12 +494,12 @@ with tabs[5]:
     cols = st.columns(3)
     for i, (name, t) in enumerate(tables.items()):
         with cols[i % 3]:
-            st.download_button(f"⬇️ {name} ({len(t)} linhas)", csv_bytes(t), file_name=name, mime="text/csv",
-                               key=f"exp_{name}", disabled=t.empty)
+            st.download_button(f"⬇{name} ({len(t)} linhas)", csv_bytes(t), file_name=name, mime="text/csv",
+                               key=f"exp_{name}", disabled=t.empty, icon=":material/download:")
     zbuf = io.BytesIO()
     with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
         for name, t in tables.items():
             if not t.empty:
                 z.writestr(name, csv_bytes(t))
-    st.download_button("📦 Baixar tudo (.zip)", zbuf.getvalue(), file_name="netscope_relatorio.zip",
-                       mime="application/zip", type="primary")
+    st.download_button("Baixar tudo (.zip)", zbuf.getvalue(), file_name="netscope_relatorio.zip",
+                       mime="application/zip", type="primary", icon=":material/folder_zip:")
