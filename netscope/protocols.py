@@ -72,23 +72,40 @@ def tcp_sessions(df: pd.DataFrame) -> pd.DataFrame:
 
     Para cada fluxo identifica: SYN, SYN-ACK e ACK do three-way handshake,
     RTT do handshake, encerramento por FIN ou RST, pacotes e bytes.
+
+    A mesma 4-tupla (IPs + portas) pode ser reutilizada por conexões sucessivas.
+    Um SYN novo inicia outra sessão quando a anterior já foi encerrada (FIN/RST),
+    quando o número de sequência inicial (ISN) difere do SYN já visto, ou quando
+    a sessão anterior foi observada já em andamento. Um SYN retransmitido
+    (mesmo ISN, conexão ainda aberta) continua na mesma sessão.
     """
     t = df[df["transport"] == "TCP"]
     if t.empty:
         return pd.DataFrame()
-    rows = {}
+    active: dict = {}   # 4-tupla -> sessão corrente
+    sessions = []       # todas as sessões, em ordem de criação
     for r in t.itertuples(index=False):
         a = (r.src_ip, int(r.src_port))
         b = (r.dst_ip, int(r.dst_port))
         key = (a, b) if a <= b else (b, a)
-        s = rows.get(key)
+        s = active.get(key)
         flags = _flags(r.tcp_flags)
+        is_syn = "SYN" in flags and "ACK" not in flags
+        seq = int(r.tcp_seq) if pd.notna(r.tcp_seq) else None
+        if s is not None and is_syn:
+            closed = s["fin"] or s["rst"]
+            other_isn = s["isn"] is not None and seq != s["isn"]
+            midstream = s["isn"] is None
+            if closed or other_isn or midstream:
+                s = None  # reuso da 4-tupla: nova conexão
         if s is None:
-            s = rows[key] = {
+            s = active[key] = {
                 "cliente": None, "porta_cliente": None, "servidor": None, "porta_servidor": None,
                 "inicio": r.rel_time, "fim": r.rel_time, "pacotes": 0, "bytes": 0, "payload": 0,
-                "t_syn": None, "t_synack": None, "t_ack": None, "fin": 0, "rst": 0, "_seen_by": a,
+                "t_syn": None, "t_synack": None, "t_ack": None, "fin": 0, "rst": 0, "isn": None,
+                "_seen_by": a, "_key": key,
             }
+            sessions.append(s)
         s["pacotes"] += 1
         s["bytes"] += r.length
         s["payload"] += r.payload_len or 0
@@ -96,6 +113,7 @@ def tcp_sessions(df: pd.DataFrame) -> pd.DataFrame:
         if "SYN" in flags and "ACK" not in flags:
             if s["t_syn"] is None:
                 s["t_syn"] = r.rel_time
+                s["isn"] = seq
                 s["cliente"], s["porta_cliente"] = a
                 s["servidor"], s["porta_servidor"] = b
         elif "SYN" in flags and "ACK" in flags:
@@ -113,7 +131,8 @@ def tcp_sessions(df: pd.DataFrame) -> pd.DataFrame:
             s["rst"] += 1
 
     out = []
-    for key, s in rows.items():
+    for s in sessions:
+        key = s["_key"]
         if s["cliente"] is None:  # sem SYN/SYN-ACK: assume quem foi visto primeiro como cliente
             (s["cliente"], s["porta_cliente"]), other = s["_seen_by"], (key[1] if key[0] == s["_seen_by"] else key[0])
             s["servidor"], s["porta_servidor"] = other
@@ -185,11 +204,14 @@ def tls_servers(df: pd.DataFrame) -> pd.DataFrame:
     hs = tls_handshakes(df)
     if hs.empty:
         return hs
-    ch = hs[hs["tls_handshake"] == "ClientHello"]
-    sh = hs[hs["tls_handshake"] == "ServerHello"][["src_ip", "src_port", "dst_ip", "dst_port", "tls_version"]]
+    keys = ["src_ip", "src_port", "dst_ip", "dst_port"]
+    ch = hs[hs["tls_handshake"] == "ClientHello"].sort_values("tempo_s")
+    sh = hs[hs["tls_handshake"] == "ServerHello"][keys + ["tempo_s", "tls_version"]]
     sh = sh.rename(columns={"src_ip": "dst_ip", "src_port": "dst_port", "dst_ip": "src_ip", "dst_port": "src_port",
-                            "tls_version": "versao_negociada"})
-    m = ch.merge(sh, on=["src_ip", "src_port", "dst_ip", "dst_port"], how="left")
+                            "tempo_s": "t_sh", "tls_version": "versao_negociada"}).sort_values("t_sh")
+    # Cada ClientHello casa com o primeiro ServerHello posterior na mesma 4-tupla. Um merge só pela
+    # 4-tupla multiplicaria as linhas quando as portas são reutilizadas por conexões sucessivas.
+    m = pd.merge_asof(ch, sh, left_on="tempo_s", right_on="t_sh", by=keys, direction="forward")
     return (m.groupby(["tls_sni", "dst_ip"], dropna=False)
             .agg(conexoes=("pacote", "count"),
                  versao_negociada=("versao_negociada", lambda s: ", ".join(sorted(set(s.dropna()))) or "?"))
