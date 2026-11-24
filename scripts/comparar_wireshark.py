@@ -30,8 +30,11 @@ CHECKS = [
     ("UDP", "udp", lambda df: int((df["transport"] == "UDP").sum())),
     ("ICMP", "icmp", lambda df: int((df["transport"] == "ICMP").sum())),
     ("ARP", "arp", lambda df: int((df["protocol"] == "ARP").sum())),
-    ("DNS", "dns", lambda df: int((df["protocol"] == "DNS").sum())),
-    ("Consultas DNS", "dns.flags.response == 0", lambda df: int(((df["protocol"] == "DNS") & (col(df, "dns_is_response") == False)).sum())),  # noqa: E712,E501
+    # mDNS e LLMNR usam o formato DNS, mas o Wireshark os exibe como protocolos próprios
+    ("DNS", "dns && !mdns && !llmnr", lambda df: int((df["protocol"] == "DNS").sum())),
+    ("MDNS", "mdns", lambda df: int((df["protocol"] == "MDNS").sum())),
+    ("LLMNR", "llmnr", lambda df: int((df["protocol"] == "LLMNR").sum())),
+    ("Consultas DNS", "dns.flags.response == 0 && !mdns && !llmnr", lambda df: int(((df["protocol"] == "DNS") & (col(df, "dns_is_response") == False)).sum())),  # noqa: E712,E501
     ("Requisições HTTP", "http.request", lambda df: int((col(df, "http_type") == "request").sum())),
     ("Respostas HTTP", "http.response", lambda df: int((col(df, "http_type") == "response").sum())),
     ("TLS ClientHello", "tls.handshake.type == 1", lambda df: int((col(df, "tls_handshake") == "ClientHello").sum())),

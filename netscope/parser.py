@@ -22,6 +22,7 @@ from scapy.all import (
     PcapReader,
 )
 from scapy.layers.inet6 import _ICMPv6
+from scapy.layers.llmnr import LLMNRQuery, LLMNRResponse
 import scapy.all as scapy_all
 
 # Tipos de registro DNS mais comuns (para exibir nome em vez de número)
@@ -37,6 +38,10 @@ TLS_VERSIONS = {
 }
 TLS_CONTENT_TYPES = {20: "ChangeCipherSpec", 21: "Alert", 22: "Handshake", 23: "ApplicationData"}
 TLS_HANDSHAKE_TYPES = {1: "ClientHello", 2: "ServerHello", 11: "Certificate", 16: "ClientKeyExchange"}
+
+# DNS "irmãos" que usam o mesmo formato de mensagem, mas são protocolos distintos
+# (o Wireshark os exibe como MDNS e LLMNR). Ficam fora das análises/anomalias de DNS.
+DNS_LIKE_PORTS = {5353: "MDNS", 5355: "LLMNR"}
 
 HTTP_METHODS = (b"GET ", b"POST ", b"PUT ", b"DELETE ", b"HEAD ", b"OPTIONS ", b"PATCH ", b"CONNECT ")
 
@@ -203,9 +208,14 @@ def extract(pkt, number: int) -> dict:
     rec["payload_len"] = len(payload)
 
     # ---- Camada de aplicação ----
-    if DNS in pkt:
-        d = pkt[DNS]
-        rec["protocol"] = "DNS"
+    d = next((pkt.getlayer(c) for c in (DNS, LLMNRQuery, LLMNRResponse) if pkt.haslayer(c)), None)
+    if d is not None:
+        label = "DNS"
+        for port in (rec["src_port"], rec["dst_port"]):
+            if port in DNS_LIKE_PORTS:
+                label = DNS_LIKE_PORTS[port]
+                break
+        rec["protocol"] = label
         rec["dns_id"] = d.id
         rec["dns_is_response"] = bool(d.qr)
         rec["dns_rcode"] = DNS_RCODES.get(d.rcode, str(d.rcode))
@@ -224,7 +234,7 @@ def extract(pkt, number: int) -> dict:
                 answers.append(str(rdata).rstrip("."))
         rec["dns_answers"] = ", ".join(answers) if answers else None
         kind = "resposta" if d.qr else "consulta"
-        rec["info"] = f"DNS {kind} 0x{d.id:04x} {rec.get('dns_qtype', '')} {rec.get('dns_qname', '')}" + (
+        rec["info"] = f"{label} {kind} 0x{d.id:04x} {rec.get('dns_qtype', '')} {rec.get('dns_qname', '')}" + (
             f" → {rec['dns_answers']}" if answers else (f" [{rec['dns_rcode']}]" if d.qr else ""))
         return rec
 
